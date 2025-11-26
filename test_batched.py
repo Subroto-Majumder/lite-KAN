@@ -4,8 +4,8 @@ from kan import KAN_Layer
 import matplotlib.pyplot as plt
 
 # Training data
-xs = torch.linspace(-3, 3, 1000)
-targets = torch.exp(torch.sin(xs)) +torch.cos(torch.exp(xs))
+xs = torch.linspace(-3, 3, 100)
+targets = torch.sin(torch.exp(xs))
 deg = 3  # deg of polynomial
 knot_vec = torch.linspace(-15, 15, 100)
 model = nn.Sequential(
