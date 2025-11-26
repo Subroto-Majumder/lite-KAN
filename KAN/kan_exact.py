@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
+import networkx as nx
 
 # ==========================================
 # 1. SETUP & GPU CONFIG
@@ -15,20 +16,21 @@ if torch.cuda.is_available():
     print(f"✅ Running on {torch.cuda.get_device_name(0)}")
 
 # ==========================================
-# 2. DATASET (Relativistic Velocity + Noise)
+# 2. DATASET (Complex Function)
 # ==========================================
 class FeynmanDataset:
     def __init__(self, num_samples=10000, mode='train'):
         if mode == 'test': torch.manual_seed(42)
         
-        # u, v = Physics. z = Noise.
-        self.u = torch.rand(num_samples, 1) * 1.8 - 0.9
-        self.v = torch.rand(num_samples, 1) * 1.8 - 0.9
-        self.z = torch.rand(num_samples, 1) * 1.8 - 0.9 
+        # 4 Inputs
+        self.x1 = torch.rand(num_samples, 1) * 2 - 1
+        self.x2 = torch.rand(num_samples, 1) * 2 - 1
+        self.x3 = torch.rand(num_samples, 1) * 2 - 1
+        self.x4 = torch.rand(num_samples, 1) * 2 - 1
         
-        # Target: f = (u+v)/(1+uv)
-        self.y = (self.u + self.v) / (1 + self.u * self.v)
-        self.x = torch.cat([self.u, self.v, self.z], dim=1)
+        # Target: f = exp(sin(pi*x1) + x2^2) + sin(x3*x4)
+        self.y = torch.exp(torch.sin(torch.pi * self.x1) + self.x2**2) + torch.sin(self.x3 * self.x4)
+        self.x = torch.cat([self.x1, self.x2, self.x3, self.x4], dim=1)
         
     def to_device(self, device):
         self.x = self.x.to(device)
@@ -198,7 +200,7 @@ def train_experiment(model, train_data, test_data, name, do_pruning=False):
         
         # --- PRUNING EVENT ---
         if do_pruning and epoch == prune_epoch:
-            model.prune_nodes(threshold=1e-2)
+            model.prune_nodes(threshold=1e-6)
             # Reset optimizer for clean fine-tuning
             optimizer = optim.AdamW(model.parameters(), lr=0.001)
 
@@ -243,21 +245,22 @@ def plot_pruned_architecture(model, filename="kan_pruned_architecture.png"):
     G = nx.Graph()
     pos = {}
     
-    # 1. Inputs (u, v, z)
-    inputs = ['u', 'v', 'z']
+    # 1. Inputs (x1, x2, x3, x4)
+    inputs = ['x1', 'x2', 'x3', 'x4']
     for i, name in enumerate(inputs):
         G.add_node(name, layer=0)
         pos[name] = (0, -i)
         
-    # 2. Hidden Nodes (0 to 4)
-    for i in range(5):
+    # 2. Hidden Nodes (0 to 9)
+    num_hidden = layer0.out_features
+    for i in range(num_hidden):
         node_name = f"h{i}"
         G.add_node(node_name, layer=1)
-        pos[node_name] = (1, -i * 0.6)
+        pos[node_name] = (1, -i * (len(inputs)/num_hidden)) # Scale spacing
         
     # 3. Output
     G.add_node("f", layer=2)
-    pos["f"] = (2, -1)
+    pos["f"] = (2, -1.5)
     
     # DRAW EDGES
     colors = []
@@ -265,8 +268,8 @@ def plot_pruned_architecture(model, filename="kan_pruned_architecture.png"):
     
     # Input -> Hidden
     w_in = layer0.spline_scaler.detach().cpu().numpy() # (Hidden, In)
-    for h in range(5):
-        for i in range(3):
+    for h in range(num_hidden):
+        for i in range(len(inputs)):
             # If hidden node is dead, make line invisible
             strength = w_in[h, i] if h in active_indices else 0
             if strength > 0.01:
@@ -276,7 +279,7 @@ def plot_pruned_architecture(model, filename="kan_pruned_architecture.png"):
 
     # Hidden -> Output
     w_out = layer1.spline_scaler.detach().cpu().numpy() # (Out, Hidden)
-    for h in range(5):
+    for h in range(num_hidden):
         strength = w_out[0, h] if h in active_indices else 0
         if strength > 0.01:
             G.add_edge(f"h{h}", "f")
@@ -307,11 +310,11 @@ if __name__ == "__main__":
     test_data = FeynmanDataset(2000, mode='test').to_device(device)
     
     # 1. Unpruned Experiment
-    model_unpruned = KANPaper([3, 5, 1]).to(device)
+    model_unpruned = KANPaper([4, 10, 1]).to(device)
     hist_unpruned = train_experiment(model_unpruned, train_data, test_data, "Unpruned KAN", do_pruning=False)
     
     # 2. Pruned Experiment
-    model_pruned = KANPaper([3, 5, 1]).to(device)
+    model_pruned = KANPaper([4, 10, 1]).to(device)
     hist_pruned = train_experiment(model_pruned, train_data, test_data, "Pruned KAN", do_pruning=True)
     
     # 3. Plotting
@@ -340,5 +343,6 @@ if __name__ == "__main__":
     
     plt.savefig("kan_exact_results.png")
     print("\n✅ Comparison saved to 'kan_exact_results.png'")
-
+    
+    # 4. Architecture Diagram
     plot_pruned_architecture(model_pruned)
